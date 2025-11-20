@@ -1,0 +1,35 @@
+Metadata-Version: 2.4
+Name: aismartspider
+Version: 0.1.0
+Summary: AI-driven webpage understanding and automatic extraction strategy framework.
+Author-email: Your Name <you@example.com>
+License: MIT
+Project-URL: Homepage, https://github.com/yourname/aismartspider
+Keywords: crawler,web scraping,AI,agent,information extraction
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests
+Requires-Dist: beautifulsoup4
+Requires-Dist: lxml
+Requires-Dist: playwright
+Requires-Dist: openai>=1.0.0
+Dynamic: license-file
+
+# AISmartSpider
+
+AI 驱动的网页理解与自动抽取策略框架。本仓库目前处于脚手架阶段，包含：
+
+- 基础包结构与模块划分
+- LLM 抽象与提示模板
+- 执行器、重试机制、输出适配层骨架
+- 示例脚本与冒烟测试雏形
+
+## 快速开始
+
+```bash
+pip install -e .
+python examples/demo_basic.py
+```
+
+更多文档和完整实现将陆续补充。
