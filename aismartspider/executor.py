@@ -71,7 +71,14 @@ class Executor:
         fallbacks = (strategy.fallbacks or {}).get("field_selectors", {})
         for field, selector in strategy.field_selectors.items():
             method = strategy.field_methods.get(field, "css")
-            value = self._extract_with_method(soup, selector, method)
+            if field in {"sub_comments", "links"} and method.startswith("attr:href"):
+                nodes = soup.select(selector)
+                value = [node.get("href", "").strip() for node in nodes if node.get("href")]
+            elif field in {"sub_comments", "links"} and method == "css":
+                nodes = soup.select(selector)
+                value = [node.get_text(strip=True) for node in nodes]
+            else:
+                value = self._extract_with_method(soup, selector, method)
             if not value and field in fallbacks:
                 value = self._extract_with_method(soup, fallbacks[field], "css")
             result[field] = value
@@ -80,16 +87,19 @@ class Executor:
     def _extract_with_method(self, soup: BeautifulSoup, selector: str, method: str) -> str:
         if not selector:
             return ""
-        if method.startswith("attr:"):
-            attr = method.split(":", 1)[1]
-            node = soup.select_one(selector)
-            return node.get(attr, "").strip() if node else ""
-        if method == "text":
+        try:
+            if method.startswith("attr:"):
+                attr = method.split(":", 1)[1]
+                node = soup.select_one(selector)
+                return node.get(attr, "").strip() if node else ""
+            if method == "text":
+                node = soup.select_one(selector)
+                return node.get_text(strip=True) if node else ""
+            # default css
             node = soup.select_one(selector)
             return node.get_text(strip=True) if node else ""
-        # default css
-        node = soup.select_one(selector)
-        return node.get_text(strip=True) if node else ""
+        except Exception:
+            return ""
 
     def _extract_list_records(self, soup: BeautifulSoup, base_url: str, strategy: Strategy) -> List[Dict[str, str]]:
         if strategy.item_link_selector:
@@ -114,12 +124,28 @@ class Executor:
         columns: Dict[str, List[str]] = {}
         for field, selector in strategy.field_selectors.items():
             nodes = soup.select(selector)
-            columns[field] = [node.get_text(strip=True) for node in nodes]
+            method = strategy.field_methods.get(field, "css")
+            values: List[str] = []
+            for node in nodes:
+                if method.startswith("attr:"):
+                    attr = method.split(":", 1)[1]
+                    values.append(node.get(attr, "").strip())
+                elif method == "text":
+                    values.append(node.get_text(strip=True))
+                else:
+                    values.append(node.get_text(strip=True))
+            columns[field] = values
         
         if not columns:
             return []
 
         keys = list(columns.keys())
+        # Special-case list aggregation fields to keep them as arrays
+        if keys == ["links"]:
+            return [{"links": columns["links"]}]
+        if keys == ["sub_comments"]:
+            return [{"sub_comments": columns["sub_comments"]}]
+
         values = [columns[k] for k in keys]
         
         records: List[Dict[str, str]] = []

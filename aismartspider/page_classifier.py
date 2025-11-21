@@ -54,4 +54,10 @@ class PageTypeClassifier:
         if not value:
             return PageType.UNKNOWN
         normalized = value.lower()
+        aliases = {
+            "detail": "news",
+            "profile": "news",
+            "thread": "forum",
+        }
+        normalized = aliases.get(normalized, normalized)
         return PageType(normalized) if normalized in PageType._value2member_map_ else PageType.UNKNOWN

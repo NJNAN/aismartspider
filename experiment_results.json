@@ -1,0 +1,148 @@
+{
+  "summary": {
+    "total_runs": 5,
+    "page_type_accuracy": 0,
+    "intent_type_accuracy": 0,
+    "strategy_field_hit_rate": 0.0,
+    "extraction_exact_match_rate": 0
+  },
+  "runs": [
+    {
+      "site": "tieba_home",
+      "url": "https://tieba.baidu.com/hottopic/browse/topicList?res_type=1",
+      "task": "抓贴吧热榜帖子的前10个链接",
+      "html_used": "https://tieba.baidu.com/hottopic/browse/topicList?res_type=1",
+      "metrics": {
+        "error": "fetch_failed",
+        "page_type": "unknown",
+        "intent_type": "other",
+        "requested_fields": [
+          "links"
+        ],
+        "strategy_fields": [],
+        "records_returned": 0,
+        "timings": {
+          "fetch": 10.038644500000373
+        },
+        "page_type_correct": false,
+        "intent_type_correct": false,
+        "intent_field_hit_rate": 0.0,
+        "strategy_field_hit_rate": 0.0,
+        "non_empty_fields": 0,
+        "extraction_exact_match": false
+      },
+      "records": [],
+      "model": "gpt-4o-mini"
+    },
+    {
+      "site": "tieba_user_profile",
+      "url": "https://tieba.baidu.com/home/main?id=tb.1.3f3a08d7.mmiURkFmNd_0YMQWrd9cmg?t=1677040149&fr=index",
+      "task": "抓用户名和贴吧粉丝数",
+      "html_used": "https://tieba.baidu.com/home/main?id=tb.1.3f3a08d7.mmiURkFmNd_0YMQWrd9cmg?t=1677040149&fr=index",
+      "metrics": {
+        "error": "fetch_failed",
+        "page_type": "unknown",
+        "intent_type": "other",
+        "requested_fields": [
+          "name",
+          "follows"
+        ],
+        "strategy_fields": [],
+        "records_returned": 0,
+        "timings": {
+          "fetch": 10.032842499999788
+        },
+        "page_type_correct": false,
+        "intent_type_correct": false,
+        "intent_field_hit_rate": 0.0,
+        "strategy_field_hit_rate": 0.0,
+        "non_empty_fields": 0,
+        "extraction_exact_match": false
+      },
+      "records": [],
+      "model": "gpt-4o-mini"
+    },
+    {
+      "site": "tieba_post",
+      "url": "https://tieba.baidu.com/p/10231775743",
+      "task": "抓帖子标题和楼主正文",
+      "html_used": "https://tieba.baidu.com/p/10231775743",
+      "metrics": {
+        "error": "fetch_failed",
+        "page_type": "unknown",
+        "intent_type": "other",
+        "requested_fields": [
+          "title",
+          "content"
+        ],
+        "strategy_fields": [],
+        "records_returned": 0,
+        "timings": {
+          "fetch": 10.027542499999981
+        },
+        "page_type_correct": false,
+        "intent_type_correct": false,
+        "intent_field_hit_rate": 0.0,
+        "strategy_field_hit_rate": 0.0,
+        "non_empty_fields": 0,
+        "extraction_exact_match": false
+      },
+      "records": [],
+      "model": "gpt-4o-mini"
+    },
+    {
+      "site": "tieba_bar_index",
+      "url": "https://tieba.baidu.com/f?kw=%E5%AD%99%E7%AC%91%E5%B7%9D&ie=utf-8",
+      "task": "抓本吧热门帖子前10个链接",
+      "html_used": "https://tieba.baidu.com/f?kw=%E5%AD%99%E7%AC%91%E5%B7%9D&ie=utf-8",
+      "metrics": {
+        "error": "fetch_failed",
+        "page_type": "unknown",
+        "intent_type": "other",
+        "requested_fields": [
+          "links"
+        ],
+        "strategy_fields": [],
+        "records_returned": 0,
+        "timings": {
+          "fetch": 10.038510599999427
+        },
+        "page_type_correct": false,
+        "intent_type_correct": false,
+        "intent_field_hit_rate": 0.0,
+        "strategy_field_hit_rate": 0.0,
+        "non_empty_fields": 0,
+        "extraction_exact_match": false
+      },
+      "records": [],
+      "model": "gpt-4o-mini"
+    },
+    {
+      "site": "tieba_post_subcomments",
+      "url": "https://tieba.baidu.com/p/10231775743",
+      "task": "抓本帖的楼中楼回复前3条",
+      "html_used": "https://tieba.baidu.com/p/10231775743",
+      "metrics": {
+        "error": "fetch_failed",
+        "page_type": "unknown",
+        "intent_type": "other",
+        "requested_fields": [
+          "sub_comments"
+        ],
+        "strategy_fields": [],
+        "records_returned": 0,
+        "timings": {
+          "fetch": 10.028712799999994
+        },
+        "page_type_correct": false,
+        "intent_type_correct": false,
+        "intent_field_hit_rate": 0.0,
+        "strategy_field_hit_rate": 0.0,
+        "non_empty_fields": 0,
+        "extraction_exact_match": false
+      },
+      "records": [],
+      "model": "gpt-4o-mini"
+    }
+  ]
+}

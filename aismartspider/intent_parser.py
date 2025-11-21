@@ -14,13 +14,18 @@ _FIELD_HINTS: Dict[str, List[str]] = {
     "title": ["标题", "题目", "title"],
     "content": ["正文", "内容", "详情", "description"],
     "date": ["时间", "日期", "time", "date"],
-    "author": ["作者", "发布者"],
+    "author": ["作者", "发布人", "回答者", "author"],
     "price": ["价格", "价钱", "price"],
     "images": ["图片", "配图", "image", "photo"],
+    "links": ["链接", "url", "跳转"],
+    "name": ["用户名", "昵称", "name"],
+    "follows": ["粉丝", "关注", "followers"],
+    "answer": ["回答", "回复"],
+    "sub_comments": ["楼中楼", "回复", "评论"],
 }
 
 _INTENT_HINTS: Dict[IntentType, List[str]] = {
-    IntentType.CRAWL_LIST: ["列表", "多条", "分页", "批量"],
+    IntentType.CRAWL_LIST: ["列表", "多条", "分页", "批量", "前10", "top"],
     IntentType.DOWNLOAD_IMAGES: ["下载图片", "保存图片", "图集"],
     IntentType.CRAWL_DETAIL: ["详情页", "递归", "深度"],
 }

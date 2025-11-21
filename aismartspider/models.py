@@ -13,6 +13,7 @@ class PageType(str, Enum):
     PRODUCT = "product"
     GALLERY = "gallery"
     FORUM = "forum"
+    PROFILE = "profile"
     SPA = "single_page_app"
     UNKNOWN = "unknown"
 

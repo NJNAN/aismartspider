@@ -3,7 +3,7 @@
 PAGE_TYPE_PROMPT_TEMPLATE = """
 你是一个网页结构分析助手。根据下面的 DOM 摘要判断页面类型。
 类型只能从以下集合中选一个：
-["news", "list", "product", "gallery", "forum", "single_page_app", "unknown"]
+["news", "list", "product", "gallery", "forum", "profile", "single_page_app", "unknown"]
 
 请只输出 JSON：
 {{

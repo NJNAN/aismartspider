@@ -16,6 +16,11 @@ _DEFAULT_FIELD_SELECTORS: Dict[str, str] = {
     "author": ".author, [itemprop='author']",
     "price": ".price, [itemprop='price']",
     "images": ".gallery img, img",
+    "links": "a",
+    "name": ".name, .username, h1",
+    "follows": ".follows, .follow-count, .fans",
+    "sub_comments": ".sub-comment, .lzl_content, .subcomment",
+    "answer": ".answer, .post-content, article",
 }
 
 _FALLBACK_FIELD_SELECTORS: Dict[str, str] = {
@@ -42,6 +47,11 @@ class StrategyBuilder:
         model_data = self._call_model(messages)
         heuristic_data = self._heuristic_strategy(typing, intent, dom_summary)
         data = self._merge_strategy_dicts(heuristic_data, model_data)
+
+        if intent.requested_fields:
+            allowed = set(intent.requested_fields)
+            data["field_selectors"] = {k: v for k, v in data.get("field_selectors", {}).items() if k in allowed}
+            data["field_methods"] = {k: v for k, v in data.get("field_methods", {}).items() if k in allowed}
 
         return Strategy(
             page_type=typing.page_type,
@@ -79,13 +89,14 @@ class StrategyBuilder:
             selector = _DEFAULT_FIELD_SELECTORS.get(field, "")
             if selector:
                 selectors[field] = selector
-                field_methods[field] = "css"
+                field_methods[field] = "attr:href" if field == "links" else "css"
 
         tag_counts = self._extract_tag_counts(dom_summary)
         is_list = typing.page_type == PageType.LIST or tag_counts.get("li", 0) > 10
         is_gallery = typing.page_type == PageType.GALLERY or tag_counts.get("img", 0) > 5
 
-        item_link_selector = ".list a, .post a, a" if is_list else None
+        wants_links = "links" in requested_fields
+        item_link_selector = None if wants_links else (".list a, .post a, a" if is_list else None)
         pagination_selector = ".pagination a.next, a.next, a[rel='next']" if is_list else None
 
         heuristics = {
