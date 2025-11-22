@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Dict, List, Optional
 
 from .ai_client import LLMClient
@@ -45,8 +46,28 @@ class IntentParser:
 
         intent_type = self._safe_intent_type(data.get("intent_type")) if data else heuristics["intent_type"]
         requested_fields = self._merge_fields(data.get("requested_fields") if data else None, heuristics["requested_fields"])
+        max_items = self._parse_limit(user_text)
 
-        return Intent(intent_type=intent_type, requested_fields=requested_fields, raw_text=user_text)
+        return Intent(
+            intent_type=intent_type,
+            requested_fields=requested_fields,
+            raw_text=user_text,
+            max_items=max_items,
+        )
+
+    @staticmethod
+    def _parse_limit(user_text: str) -> Optional[int]:
+        # Match "前10", "Top 10" (most specific and common for limits)
+        m = re.search(r'(?:前|top)\s*(\d+)', user_text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+
+        # Match "10个", "10条", "10章" etc.
+        m = re.search(r'(\d+)\s*(?:个|条|篇|章|项|links?)', user_text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+            
+        return None
 
     def _call_model(self, messages: List[Dict[str, str]]) -> Dict[str, List[str] | str]:
         try:

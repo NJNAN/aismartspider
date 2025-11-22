@@ -25,6 +25,11 @@ from aismartspider import (
     StrategyBuilder,
 )
 from aismartspider.models import IntentType, PageType
+from aismartspider.metrics.extraction import (
+    compute_field_precision_recall,
+    compute_fuzzy_similarity,
+)
+from aismartspider.metrics.system_metrics import aggregate_timings
 
 
 @dataclass
@@ -127,6 +132,11 @@ class ExperimentRunner:
             "intent_type": intent.intent_type.value,
             "requested_fields": intent.requested_fields,
             "strategy_fields": list(strategy.field_selectors.keys()),
+            "strategy_details": {
+                "selectors": strategy.field_selectors,
+                "limits": strategy.field_limits,
+                "methods": strategy.field_methods
+            },
             "records_returned": len(records),
             "timings": timings,
         }
@@ -264,6 +274,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cookies", default=None, help="Cookies string (k=v; k2=v2) or path to json file.")
     parser.add_argument("--proxy", default=None, help="Proxy URL (e.g. http://127.0.0.1:7890).")
     parser.add_argument("--use-playwright", action="store_true", help="Force use Playwright.")
+    parser.add_argument("--gold", default=None, help="Path to gold standard JSON file for evaluation.")
     return parser.parse_args()
 
 
@@ -304,11 +315,86 @@ def main() -> None:
             all_results.append(result)
 
     summary = _summarize(all_results)
+    
+    report_text = ""
+    if args.gold:
+        eval_summary = _evaluate_with_gold(all_results, args.gold)
+        summary.update(eval_summary)
+        
+        lines = []
+        lines.append("=== Evaluation Report ===")
+        lines.append(f"Page Type Accuracy: {summary.get('page_type_accuracy', 0):.3f}")
+        lines.append("\n=== Extraction Quality ===")
+        lines.append(f"Field Precision: {summary.get('field_precision', 0):.3f}")
+        lines.append(f"Field Recall:    {summary.get('field_recall', 0):.3f}")
+        lines.append(f"Field F1:        {summary.get('field_f1', 0):.3f}")
+        lines.append(f"Fuzzy Score:     {summary.get('fuzzy_score', 0):.3f}")
+        lines.append("\n=== System Performance ===")
+        for k, v in summary.get('timings_summary', {}).items():
+            lines.append(f"{k}: mean={v['mean']:.3f}s, std={v['std']:.3f}s, min={v['min']:.3f}s, max={v['max']:.3f}s")
+        
+        report_text = "\n".join(lines)
+        print(f"\n{report_text}")
+
     output = {"summary": summary, "runs": all_results}
+    if report_text:
+        output["evaluation_report"] = report_text
+
     Path(args.output).write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Wrote results to {args.output}")
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if not args.gold:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def _evaluate_with_gold(results: List[Dict[str, Any]], gold_path: str) -> Dict[str, Any]:
+    try:
+        gold_data = json.loads(Path(gold_path).read_text(encoding="utf-8"))
+        gold_runs = gold_data.get("runs", [])
+    except Exception as e:
+        print(f"Error loading gold file: {e}")
+        return {}
+
+    gold_idx = {(r["site"], r["url"]): r for r in gold_runs}
+    
+    field_pr_results = []
+    fuzzy_scores = []
+    timings_list = []
+
+    for run in results:
+        key = (run["site"], run["url"])
+        if key not in gold_idx:
+            continue
+
+        gold_run = gold_idx[key]
+        
+        # Extraction Quality
+        gold_fields = gold_run.get("fields", {})
+        pred_records = run.get("records", [])
+        pred_fields = pred_records[0] if pred_records else {}
+
+        pr = compute_field_precision_recall(gold_fields, pred_fields)
+        field_pr_results.append(pr)
+
+        fuzzy = compute_fuzzy_similarity(gold_fields, pred_fields)
+        fuzzy_scores.append(fuzzy)
+
+        timings_list.append(run["metrics"].get("timings", {}))
+
+    avg_precision = mean([x["precision"] for x in field_pr_results]) if field_pr_results else 0.0
+    avg_recall = mean([x["recall"] for x in field_pr_results]) if field_pr_results else 0.0
+    avg_f1 = mean([x["f1"] for x in field_pr_results]) if field_pr_results else 0.0
+    avg_fuzzy = mean(fuzzy_scores) if fuzzy_scores else 0.0
+    
+    timing_summary = aggregate_timings(timings_list)
+
+    return {
+        "field_precision": avg_precision,
+        "field_recall": avg_recall,
+        "field_f1": avg_f1,
+        "fuzzy_score": avg_fuzzy,
+        "timings_summary": timing_summary
+    }
 
 
 def _summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:

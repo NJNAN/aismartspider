@@ -53,7 +53,7 @@ class StrategyBuilder:
             data["field_selectors"] = {k: v for k, v in data.get("field_selectors", {}).items() if k in allowed}
             data["field_methods"] = {k: v for k, v in data.get("field_methods", {}).items() if k in allowed}
 
-        return Strategy(
+        strategy = Strategy(
             page_type=typing.page_type,
             intent=intent,
             field_selectors=data.get("field_selectors", {}),
@@ -63,9 +63,17 @@ class StrategyBuilder:
             max_depth=data.get("max_depth", 1),
             pagination_selector=data.get("pagination_selector"),
             max_pages=data.get("max_pages", 1),
+            max_items=intent.max_items,
             image_selector=data.get("image_selector"),
+            field_limits=data.get("field_limits"),
             fallbacks=data.get("fallbacks"),
         )
+
+        # Heuristic: if max_items is set and small, limit max_pages to avoid over-crawling
+        if strategy.max_items and strategy.max_items <= 20:
+            strategy.max_pages = 1
+            
+        return strategy
 
     def _call_model(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         try:

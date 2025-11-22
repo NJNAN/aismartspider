@@ -39,6 +39,7 @@ class Intent:
     intent_type: IntentType
     requested_fields: Optional[List[str]]
     raw_text: str
+    max_items: Optional[int] = None
 
 
 @dataclass
@@ -55,7 +56,10 @@ class Strategy:
 
     pagination_selector: Optional[str] = None
     max_pages: int = 1
+    max_items: Optional[int] = None
 
     image_selector: Optional[str] = None
+    
+    field_limits: Optional[Dict[str, int]] = None
 
     fallbacks: Optional[Dict[str, Any]] = None

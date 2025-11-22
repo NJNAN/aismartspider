@@ -32,7 +32,7 @@ class Executor:
     def _run_news_flow(self, url: str, strategy: Strategy) -> List[Dict[str, str]]:
         html = self.retry_policy.run(lambda: self.fetcher.fetch(url))
         soup = BeautifulSoup(html, "lxml")
-        record = self._extract_fields(soup, strategy)
+        record = self._extract_fields(soup, strategy, url)
         return [record]
 
     def _run_list_flow(self, url: str, strategy: Strategy) -> List[Dict[str, str]]:
@@ -41,13 +41,24 @@ class Executor:
         next_url: str | None = url
         visited: set[str] = set()
 
-        while next_url and pages_processed < max(1, strategy.max_pages or 1):
+        # Hard limit on pages to prevent infinite loops
+        MAX_PAGE_VISITS = 5
+        max_pages = min(strategy.max_pages or 1, MAX_PAGE_VISITS)
+
+        while next_url and pages_processed < max_pages:
             if next_url in visited:
                 break
             visited.add(next_url)
             html = self.retry_policy.run(lambda target=next_url: self.fetcher.fetch(target))
             soup = BeautifulSoup(html, "lxml")
-            records.extend(self._extract_list_records(soup, next_url, strategy))
+            
+            new_records = self._extract_list_records(soup, next_url, strategy)
+            records.extend(new_records)
+            
+            if strategy.max_items and len(records) >= strategy.max_items:
+                records = records[:strategy.max_items]
+                break
+
             pages_processed += 1
             next_url = self._next_page_url(soup, next_url, strategy.pagination_selector)
 
@@ -56,29 +67,54 @@ class Executor:
     def _run_gallery_flow(self, url: str, strategy: Strategy) -> List[Dict[str, str]]:
         html = self.retry_policy.run(lambda: self.fetcher.fetch(url))
         soup = BeautifulSoup(html, "lxml")
-        record = self._extract_fields(soup, strategy)
+        record = self._extract_fields(soup, strategy, url)
         record["images"] = self._collect_images(soup, strategy.image_selector or "img")
         return [record]
 
     def _run_default_flow(self, url: str, strategy: Strategy) -> List[Dict[str, str]]:
         html = self.retry_policy.run(lambda: self.fetcher.fetch(url))
         soup = BeautifulSoup(html, "lxml")
-        record = self._extract_fields(soup, strategy)
+        record = self._extract_fields(soup, strategy, url)
         return [record]
 
-    def _extract_fields(self, soup: BeautifulSoup, strategy: Strategy) -> Dict[str, str]:
+    def _extract_fields(self, soup: BeautifulSoup, strategy: Strategy, base_url: str | None = None) -> Dict[str, str]:
         result: Dict[str, str] = {}
         fallbacks = (strategy.fallbacks or {}).get("field_selectors", {})
+        limits = strategy.field_limits or {}
+        global_limit = strategy.max_items
+
         for field, selector in strategy.field_selectors.items():
             method = strategy.field_methods.get(field, "css")
+            limit = limits.get(field)
+            # Treat 0 as None (no limit specified) so global_limit can apply
+            if limit == 0:
+                limit = None
+            
+            if global_limit:
+                if limit is None or global_limit < limit:
+                    limit = global_limit
+
             if field in {"sub_comments", "links"} and method.startswith("attr:href"):
                 nodes = soup.select(selector)
-                value = [node.get("href", "").strip() for node in nodes if node.get("href")]
+                # Resolve URLs first, then limit
+                value = []
+                for node in nodes:
+                    href = node.get("href", "").strip()
+                    if href and not href.lower().startswith("javascript:"):
+                        b_url = base_url or self.fetcher.base_url or ""
+                        resolved = self._resolve_url(b_url, href)
+                        if resolved:
+                            value.append(resolved)
+                if limit:
+                    value = value[:limit]
             elif field in {"sub_comments", "links"} and method == "css":
                 nodes = soup.select(selector)
+                if limit:
+                    nodes = nodes[:limit]
                 value = [node.get_text(strip=True) for node in nodes]
             else:
                 value = self._extract_with_method(soup, selector, method)
+            
             if not value and field in fallbacks:
                 value = self._extract_with_method(soup, fallbacks[field], "css")
             result[field] = value
@@ -104,7 +140,7 @@ class Executor:
     def _extract_list_records(self, soup: BeautifulSoup, base_url: str, strategy: Strategy) -> List[Dict[str, str]]:
         if strategy.item_link_selector:
             return self._follow_detail_links(soup, base_url, strategy)
-        return self._extract_inline_list(soup, strategy)
+        return self._extract_inline_list(soup, strategy, base_url)
 
     def _follow_detail_links(self, soup: BeautifulSoup, base_url: str, strategy: Strategy) -> List[Dict[str, str]]:
         records: List[Dict[str, str]] = []
@@ -117,23 +153,49 @@ class Executor:
                 continue
             detail_html = self.retry_policy.run(lambda target_url=target: self.fetcher.fetch(target_url))
             detail_soup = BeautifulSoup(detail_html, "lxml")
-            records.append(self._extract_fields(detail_soup, strategy))
+            # Note: _extract_fields uses self.fetcher.base_url which might be wrong if we are deep linking.
+            # But _extract_fields doesn't take base_url. Ideally it should.
+            # For now, let's assume absolute URLs or that fetcher updates base_url?
+            # Actually, fetcher.fetch doesn't update base_url property usually.
+            # We should probably pass base_url to _extract_fields too, but let's fix inline list first.
+            records.append(self._extract_fields(detail_soup, strategy, target))
         return records
 
-    def _extract_inline_list(self, soup: BeautifulSoup, strategy: Strategy) -> List[Dict[str, str]]:
+    def _extract_inline_list(self, soup: BeautifulSoup, strategy: Strategy, base_url: str | None = None) -> List[Dict[str, str]]:
         columns: Dict[str, List[str]] = {}
+        limits = strategy.field_limits or {}
+        global_limit = strategy.max_items
+
         for field, selector in strategy.field_selectors.items():
             nodes = soup.select(selector)
+            limit = limits.get(field)
+            # Treat 0 as None (no limit specified) so global_limit can apply
+            if limit == 0:
+                limit = None
+            
+            if global_limit:
+                if limit is None or global_limit < limit:
+                    limit = global_limit
+            
             method = strategy.field_methods.get(field, "css")
             values: List[str] = []
             for node in nodes:
                 if method.startswith("attr:"):
                     attr = method.split(":", 1)[1]
-                    values.append(node.get(attr, "").strip())
+                    val = node.get(attr, "").strip()
+                    if attr == "href":
+                        if val.lower().startswith("javascript:"):
+                            continue
+                        if base_url:
+                            val = self._resolve_url(base_url, val) or val
+                    values.append(val)
                 elif method == "text":
                     values.append(node.get_text(strip=True))
                 else:
                     values.append(node.get_text(strip=True))
+            
+            if limit:
+                values = values[:limit]
             columns[field] = values
         
         if not columns:

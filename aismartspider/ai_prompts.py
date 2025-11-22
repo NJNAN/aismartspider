@@ -46,11 +46,16 @@ DOM 摘要:
 1. 优先使用 DOM 摘要中 `structure_hints` 提供的 class 或 id 来定位正文容器（如 .article-body, #content 等），避免使用过于宽泛的 `body` 或 `div`。
 2. 对于日期（date），尝试寻找包含时间信息的 meta 标签或具有 time/date 类名的元素。
 3. 对于正文（content），尽量排除广告、侧边栏和评论区。
+4. 如果请求的字段是链接（如 links, url, href），请在 `field_methods` 中使用 "attr:href"，并确保 selector 指向 `a` 标签。
+5. 如果请求的字段是图片（如 image, src），请在 `field_methods` 中使用 "attr:src"，并确保 selector 指向 `img` 标签。
+6. 对于代码块（code），请定位到 `pre` 或 `code` 标签。
+7. 如果用户任务中指定了数量限制（例如“前10个”、“Top 5”），请在 `field_limits` 中设置相应的数字。
 
 输出 JSON:
 {{
-  "field_selectors": {{"title": "h1", "date": ".time", "content": ".article-body"}},
-  "field_methods": {{"title": "css", "date": "css", "content": "css"}},
+  "field_selectors": {{"title": "h1", "date": ".time", "content": ".article-body", "links": ".list a"}},
+  "field_methods": {{"title": "css", "date": "css", "content": "css", "links": "attr:href"}},
+  "field_limits": {{"links": 10}},
   "is_list": false,
   "item_link_selector": null,
   "pagination_selector": null,
