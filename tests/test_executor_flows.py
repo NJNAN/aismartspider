@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from aismartspider import Executor
+from aismartspider import Executor, FetchResult
 from aismartspider.models import Intent, IntentType, PageType, Strategy
 from aismartspider.utils.retry import RetryPolicy
 
@@ -13,8 +13,8 @@ class DummyFetcher:
     def __init__(self, mapping: Dict[str, str]) -> None:
         self.mapping = mapping
 
-    def fetch(self, url: str) -> str:
-        return self.mapping[url]
+    def fetch(self, url: str) -> FetchResult:
+        return FetchResult(url=url, html=self.mapping[url], renderer="mock")
 
 
 class NoRetry(RetryPolicy):
@@ -81,4 +81,32 @@ def test_gallery_flow_collects_images():
     executor = Executor(DummyFetcher({base_url: html}), retry_policy=NoRetry())
     records = executor.execute(base_url, strategy)
     assert records[0]["title"] == "Gallery"
-    assert records[0]["images"] == ["a.jpg", "b.jpg"]
+    assert records[0]["images"] == ["http://example.com/a.jpg", "http://example.com/b.jpg"]
+
+
+def test_primary_image_selector_returns_single_image():
+    intent = Intent(intent_type=IntentType.EXTRACT_INFO, requested_fields=["title", "image"], raw_text="")
+    strategy = Strategy(
+        page_type=PageType.NEWS,
+        intent=intent,
+        field_selectors={"title": "h1"},
+        field_methods={"title": "css"},
+        primary_image_field="image",
+        primary_image_selector="article img.hero",
+    )
+    html = """
+    <html>
+        <body>
+            <article>
+                <h1>Hero</h1>
+                <img class="hero" src="/hero.jpg" />
+                <img src="/other.jpg" />
+            </article>
+        </body>
+    </html>
+    """
+    base_url = "http://example.com/detail.html"
+    executor = Executor(DummyFetcher({base_url: html}), retry_policy=NoRetry())
+    record = executor.execute(base_url, strategy)[0]
+    assert record["title"] == "Hero"
+    assert record["image"] == "http://example.com/hero.jpg"

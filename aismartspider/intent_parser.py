@@ -2,36 +2,34 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Dict, List, Optional
 
 from .ai_client import LLMClient
 from .ai_prompts import INTENT_PROMPT_TEMPLATE
 from .models import Intent, IntentType
+from .utils.json_utils import extract_json_payload, ensure_string_list
 
 
 _FIELD_HINTS: Dict[str, List[str]] = {
-    "title": ["标题", "题目", "title"],
-    "content": ["正文", "内容", "详情", "description"],
-    "date": ["时间", "日期", "time", "date"],
-    "author": ["作者", "发布人", "回答者", "author"],
-    "price": ["价格", "价钱", "price"],
-    "images": ["图片", "配图", "image", "photo"],
-    "links": ["链接", "url", "跳转"],
-    "name": ["用户名", "昵称", "name"],
-    "follows": ["粉丝", "关注", "followers"],
-    "answer": ["回答", "回复"],
-    "sub_comments": ["楼中楼", "回复", "评论"],
+    "title": ["title", "\u6807\u9898", "\u9898\u76ee"],
+    "content": ["content", "\u6b63\u6587", "\u5185\u5bb9", "\u8be6\u60c5", "description"],
+    "date": ["date", "time", "\u65f6\u95f4", "\u65e5\u671f"],
+    "author": ["author", "\u4f5c\u8005", "\u53d1\u5e03\u8005"],
+    "price": ["price", "\u4ef7\u683c", "\u4ef7\u94b1"],
+    "images": ["image", "photo", "\u56fe\u7247", "\u914d\u56fe"],
+    "links": ["link", "url", "\u94fe\u63a5", "\u8df3\u8f6c"],
+    "name": ["name", "\u7528\u6237\u540d", "\u6635\u79f0"],
+    "follows": ["followers", "fans", "\u7c89\u4e1d", "\u5173\u6ce8"],
+    "answer": ["answer", "\u56de\u7b54", "\u56de\u590d"],
+    "sub_comments": ["sub comment", "reply", "\u697c\u4e2d\u697c", "\u8bc4\u8bba"],
 }
 
 _INTENT_HINTS: Dict[IntentType, List[str]] = {
-    IntentType.CRAWL_LIST: ["列表", "多条", "分页", "批量", "前10", "top"],
-    IntentType.DOWNLOAD_IMAGES: ["下载图片", "保存图片", "图集"],
-    IntentType.CRAWL_DETAIL: ["详情页", "递归", "深度"],
+    IntentType.CRAWL_LIST: ["list", "\u5217\u8868", "\u591a\u6761", "\u5206\u9875", "top"],
+    IntentType.DOWNLOAD_IMAGES: ["image", "\u56fe\u7247", "\u56fe\u96c6", "\u4e0b\u8f7d\u56fe"],
+    IntentType.CRAWL_DETAIL: ["detail", "\u8be6\u60c5", "\u9012\u5f52", "\u6df1\u5ea6"],
 }
-
-
 class IntentParser:
     """Parse user text into structured Intent objects."""
 
@@ -44,8 +42,16 @@ class IntentParser:
         data = self._call_model(messages)
         heuristics = self._heuristic_parse(user_text)
 
-        intent_type = self._safe_intent_type(data.get("intent_type")) if data else heuristics["intent_type"]
-        requested_fields = self._merge_fields(data.get("requested_fields") if data else None, heuristics["requested_fields"])
+        model_intent = self._safe_intent_type(data.get("intent_type")) if data else None
+        if model_intent and model_intent != IntentType.OTHER:
+            intent_type = model_intent
+        else:
+            intent_type = heuristics["intent_type"]
+
+        requested_fields = self._merge_fields(
+            data.get("requested_fields") if data else None,
+            heuristics["requested_fields"],
+        )
         max_items = self._parse_limit(user_text)
 
         return Intent(
@@ -72,15 +78,23 @@ class IntentParser:
     def _call_model(self, messages: List[Dict[str, str]]) -> Dict[str, List[str] | str]:
         try:
             response = self.client.chat(messages)
-            content = response.get("content", "").strip()
-            if content.startswith("```"):
-                content = content.strip("`")
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-            return json.loads(content)
+            payload = extract_json_payload(response.get("content", ""))
         except Exception:
             return {}
+        if not isinstance(payload, dict):
+            return {}
+        requested = ensure_string_list(payload.get("requested_fields"))
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        deduped: List[str] = []
+        for field in requested:
+            if field not in seen:
+                deduped.append(field)
+                seen.add(field)
+        return {
+            "intent_type": payload.get("intent_type"),
+            "requested_fields": deduped,
+        }
 
     def _heuristic_parse(self, user_text: str) -> Dict[str, Optional[List[str]] | IntentType]:
         lowered = user_text.lower()

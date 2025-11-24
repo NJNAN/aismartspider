@@ -1,60 +1,63 @@
-"""Prompt templates used for LLM calls."""
+"""Prompt templates used for LLM calls with strict JSON constraints."""
 
 PAGE_TYPE_PROMPT_TEMPLATE = """
-你是一个网页结构分析助手。根据下面的 DOM 摘要判断页面类型。
-类型只能从以下集合中选一个：
-["news", "list", "product", "gallery", "forum", "profile", "single_page_app", "unknown"]
+You are a web page structure classifier. Decide the page type based on the DOM summary.
 
-请只输出 JSON：
+Hard requirements:
+1. Allowed values for page_type (lowercase only): ["news","list","product","gallery","forum","profile","single_page_app","unknown"]
+2. Output EXACTLY one JSON object. No natural language, comments, or Markdown code fences.
+3. The JSON object must include page_type, confidence (0-1 float), and suggested_fields (array of strings).
+
+Output format:
 {{
-  "page_type": "...",
-  "confidence": 0.0,
-  "suggested_fields": ["title", "date", ...]
+  "page_type": "news",
+  "confidence": 0.92,
+  "suggested_fields": ["title", "date", "content"]
 }}
 
-DOM 摘要：
+DOM summary:
 {dom_summary}
 """
 
 INTENT_PROMPT_TEMPLATE = """
-你是一个自然语言任务解析器。根据用户指令，从以下类型中选一个任务类型：
-["extract_info", "crawl_list", "download_images", "crawl_detail", "compare_price", "other"]
+You are a natural language task interpreter. Select INTENT_TYPE strictly from:
+["extract_info","crawl_list","download_images","crawl_detail","compare_price","other"]
 
-同时解析用户明确希望抽取的字段（如果有），例如 ["title","date","content"]。
+Also list the fields explicitly requested by the user (return an empty array if none).
+Return ONLY a JSON object with the following keys: intent_type, requested_fields.
 
-请只输出 JSON：
+Example:
 {{
-  "intent_type": "...",
-  "requested_fields": ["..."]
+  "intent_type": "crawl_list",
+  "requested_fields": ["title","date","links"]
 }}
 
-用户指令：
+User instruction:
 {user_text}
 """
 
 STRATEGY_PROMPT_TEMPLATE = """
-你是一个网页抽取策略生成器。根据页面类型、用户任务和 DOM 摘要，生成一个 JSON 策略，用于驱动爬虫。
+You are a strategy generator that must return a deterministic JSON object describing how to extract data.
 
-页面类型: {page_type}
-任务类型: {intent_type}
-用户请求字段: {requested_fields}
+Context:
+- page_type: {page_type}
+- intent_type: {intent_type}
+- user requested fields: {requested_fields}
+- DOM summary: {dom_summary}
 
-DOM 摘要:
-{dom_summary}
+Constraints:
+1. Respond with a SINGLE JSON object. No prose or Markdown.
+2. Allowed keys: field_selectors (dict[str,str]), field_methods (dict[str,str]), field_limits (dict[str,int]),
+   is_list (bool), item_link_selector (str|null), pagination_selector (str|null), max_depth (int),
+   max_pages (int), image_selector (str|null), fallbacks (dict).
+3. Prefer selectors derived from structure_hints; avoid overly broad "body" or plain "div".
+4. Link fields must use attr:href, image fields must use attr:src.
+5. If recursive crawling is needed, set item_link_selector and sensible max_depth/max_pages.
 
-请注意：
-1. 优先使用 DOM 摘要中 `structure_hints` 提供的 class 或 id 来定位正文容器（如 .article-body, #content 等），避免使用过于宽泛的 `body` 或 `div`。
-2. 对于日期（date），尝试寻找包含时间信息的 meta 标签或具有 time/date 类名的元素。
-3. 对于正文（content），尽量排除广告、侧边栏和评论区。
-4. 如果请求的字段是链接（如 links, url, href），请在 `field_methods` 中使用 "attr:href"，并确保 selector 指向 `a` 标签。
-5. 如果请求的字段是图片（如 image, src），请在 `field_methods` 中使用 "attr:src"，并确保 selector 指向 `img` 标签。
-6. 对于代码块（code），请定位到 `pre` 或 `code` 标签。
-7. 如果用户任务中指定了数量限制（例如“前10个”、“Top 5”），请在 `field_limits` 中设置相应的数字。
-
-输出 JSON:
+Example output:
 {{
-  "field_selectors": {{"title": "h1", "date": ".time", "content": ".article-body", "links": ".list a"}},
-  "field_methods": {{"title": "css", "date": "css", "content": "css", "links": "attr:href"}},
+  "field_selectors": {{"title": "article h1", "content": ".article-body"}},
+  "field_methods": {{"title": "css", "content": "css"}},
   "field_limits": {{"links": 10}},
   "is_list": false,
   "item_link_selector": null,
@@ -62,6 +65,23 @@ DOM 摘要:
   "max_depth": 1,
   "max_pages": 1,
   "image_selector": null,
-  "fallbacks": {{}}
+  "fallbacks": {{"field_selectors": {{"title": "title"}}}}
 }}
+"""
+
+FIRST_IMAGE_PROMPT_TEMPLATE = """
+You are producing a single CSS selector that points to the semantic first/hero image inside the article body.
+
+Contract:
+1. Reply with ONLY one JSON object matching this schema: {{"selector": "<css-selector-or-null>"}}.
+2. selector must be a single CSS selector string targeting exactly one <img>. If there is no valid hero image, set selector to null.
+3. Never return image URLs, arrays, or explanations. No Markdown or prose.
+4. Focus on main/article/section content areas and ignore navigation, headers, footers, or ad banners.
+5. Prefer selectors that begin from meaningful containers (article, main, #content, .post-body, etc.) and avoid generic "img".
+
+Inputs:
+- page_type: {page_type}
+- task: {task}
+- requested_field: {field_name}
+- DOM summary (includes structure_hints + image_hints with parent tags and order): {dom_summary}
 """

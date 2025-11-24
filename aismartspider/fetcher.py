@@ -1,157 +1,248 @@
-"""HTTP fetching and optional rendering utilities."""
+"""HTTP fetching and automatic rendering utilities."""
 
 from __future__ import annotations
 
-from typing import Optional, Dict
 import time
+from dataclasses import dataclass
+from typing import Dict, Optional, Sequence, Tuple
 
 from curl_cffi import requests
 
 from .config import settings
 
 
-class Fetcher:
-    """Simple fetcher with optional Playwright rendering hook."""
+@dataclass
+class FetchResult:
+    """Represents a fetched (and possibly rendered) page."""
 
-    def __init__(self, use_playwright: bool = False, cookies: Optional[Dict[str, str]] = None, proxy: Optional[str] = None) -> None:
-        self.use_playwright = use_playwright
+    url: str
+    html: str
+    renderer: str
+    degraded: bool = False
+
+
+class Fetcher:
+    """Fetch pages and transparently render dynamic content when needed."""
+
+    def __init__(
+        self,
+        use_playwright: bool | None = None,
+        cookies: Optional[Dict[str, str]] = None,
+        proxy: Optional[str] = None,
+        auto_render: bool = True,
+        render_backends: Optional[Sequence[str]] = None,
+        selenium_options: Optional[Dict[str, str]] = None,
+    ) -> None:
+        # use_playwright is kept for backward-compatibility; default to auto-render.
+        if use_playwright is None:
+            use_playwright = True
+
+        self.auto_render = auto_render
         self.cookies = cookies or {}
         self.proxy = proxy
+        self.selenium_options = selenium_options or {}
 
-    def fetch(self, url: str) -> str:
-        """Fetch page source via static request with optional render fallback."""
-        html = None
+        default_backends: Tuple[str, ...] = ("playwright", "selenium") if use_playwright else ()
+        self.render_backends: Tuple[str, ...] = tuple(render_backends or default_backends)
+
+    def fetch(self, url: str) -> FetchResult:
+        """Fetch page source via static request with automatic render fallback."""
+        static_html = ""
+        final_url = url
+        last_error: Exception | None = None
+
         try:
-            html = self._fetch_static(url)
-        except Exception as e:
-            if not self.use_playwright:
-                print(f"Static fetch failed: {e}")
-                return ""
-            # If static fails and we have playwright, suppress error and try playwright
-            pass
+            static_html, final_url = self._fetch_static(url)
+        except Exception as exc:
+            last_error = exc
 
-        if not html and self.use_playwright:
-            html = self._fetch_with_playwright(url)
-        return html or ""
+        needs_render = self.auto_render and self._needs_render(static_html)
+        if static_html and not needs_render:
+            return FetchResult(url=final_url, html=static_html, renderer="static")
 
-    def _fetch_static(self, url: str) -> Optional[str]:
-        # Let curl_cffi handle most headers to ensure consistency with the TLS fingerprint
-        # We only set basic ones.
+        rendered = None
+        if self.auto_render:
+            rendered = self._render_with_backends(url)
+        if rendered:
+            html, rendered_url, backend = rendered
+            return FetchResult(url=rendered_url or url, html=html, renderer=backend)
+
+        if static_html:
+            return FetchResult(url=final_url, html=static_html, renderer="static", degraded=True)
+
+        if last_error:
+            raise last_error
+
+        return FetchResult(url=url, html="", renderer="static", degraded=True)
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+    def _fetch_static(self, url: str) -> Tuple[str, str]:
+        # Encode URL to handle non-ASCII characters (e.g. Chinese in query params)
+        from urllib.parse import quote, urlsplit, urlunsplit
+        
+        parts = urlsplit(url)
+        # Encode path and query, keeping safe characters
+        # safe characters for path usually include /
+        # safe characters for query usually include = & %
+        encoded_path = quote(parts.path, safe="/%")
+        encoded_query = quote(parts.query, safe="=&%")
+        encoded_url = urlunsplit((parts.scheme, parts.netloc, encoded_path, encoded_query, parts.fragment))
+
         headers = {
-            "Referer": "https://tieba.baidu.com/",
+            "Referer": encoded_url,
             "Upgrade-Insecure-Requests": "1",
+            "User-Agent": settings.user_agent,
         }
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        
-        # Debug: Print cookies to ensure they are passed correctly
-        # print(f"DEBUG: Sending cookies: {list(self.cookies.keys())}")
-        
-        try:
-            response = requests.get(
-                url, 
-                headers=headers, 
-                cookies=self.cookies, 
-                proxies=proxies, 
-                timeout=settings.timeout,
-                impersonate="chrome120", # Use a specific version for stability
-                allow_redirects=False
-            )
-            
-            if response.status_code in (301, 302, 303, 307, 308):
-                location = response.headers.get('Location')
-                print(f"DEBUG: Redirect detected for {url}")
-                print(f"DEBUG: Location: {location}")
-                if "passport.baidu.com" in location or "login" in location:
-                    print("DEBUG: !!! LOGIN REQUIRED - YOUR BDUSS COOKIE IS EXPIRED OR INVALID !!!")
-                return ""
 
-            if response.status_code == 403:
-                print(f"DEBUG: 403 Forbidden for {url}")
-                # print(f"DEBUG: Response headers: {response.headers}")
-                return ""
+        response = requests.get(
+            encoded_url,
+            headers=headers,
+            cookies=self.cookies,
+            proxies=proxies,
+            timeout=settings.timeout,
+            impersonate="chrome120",
+            allow_redirects=True,
+        )
 
-            time.sleep(0.5)  # Prevent rate limiting
-            response.raise_for_status()
-            
-            # Degradation detection
-            if "<html" not in response.text.lower():
-                print(f"Warning: Possible degradation detected for {url} (no <html> tag)")
-                
-            return response.text
-        except Exception:
-            # Let the caller decide whether to suppress or not, but here we just raise
-            # actually, to make the logic in fetch() cleaner, let's re-raise
-            raise
+        if response.status_code == 403:
+            print(f"[Fetcher] 403 Forbidden for {url}")
+            return "", response.url or url
 
-    def _fetch_with_playwright(self, url: str) -> Optional[str]:
+        response.raise_for_status()
+        time.sleep(0.5)  # gentle rate limit
+
+        if "<html" not in response.text.lower():
+            print(f"[Fetcher] Warning: unusual response, missing <html> tag for {url}")
+
+        return response.text, response.url or url
+
+    def _render_with_backends(self, url: str) -> Optional[Tuple[str, str, str]]:
+        for backend in self.render_backends:
+            if backend == "playwright":
+                rendered = self._fetch_with_playwright(url)
+            elif backend == "selenium":
+                rendered = self._fetch_with_selenium(url)
+            else:
+                continue
+
+            if rendered and rendered[0]:
+                html, final_url = rendered
+                return html, final_url or url, backend
+        return None
+
+    def _fetch_with_playwright(self, url: str) -> Optional[Tuple[str, str]]:
         try:
             from playwright.sync_api import sync_playwright
             import random
         except ImportError:
-            print("Playwright not installed. Please run 'pip install playwright' and 'playwright install'.")
+            print("[Fetcher] Playwright not installed. Run 'pip install playwright' and 'playwright install'.")
             return None
 
         try:
             with sync_playwright() as p:
                 launch_args = {
                     "headless": True,
-                    "args": ["--disable-blink-features=AutomationControlled"]
+                    "args": ["--disable-blink-features=AutomationControlled"],
                 }
                 if self.proxy:
                     launch_args["proxy"] = {"server": self.proxy}
-                
+
                 browser = p.chromium.launch(**launch_args)
-                
-                # Create a new context with specific user agent if needed
                 context = browser.new_context(
                     user_agent=settings.user_agent,
                     viewport={"width": 1920, "height": 1080},
                     locale="zh-CN",
-                    timezone_id="Asia/Shanghai"
+                    timezone_id="Asia/Shanghai",
                 )
-                
-                # Stealth: Hide webdriver property
-                context.add_init_script("""
+                context.add_init_script(
+                    """
                     Object.defineProperty(navigator, 'webdriver', {
                         get: () => undefined
                     });
-                """)
-                
+                    """
+                )
+
                 if self.cookies:
                     from urllib.parse import urlparse
+
                     parsed = urlparse(url)
-                    domain = parsed.hostname
-                    # If it's a baidu subdomain, set cookies for .baidu.com to ensure they work across subdomains
+                    domain = parsed.hostname or ""
                     if domain and "baidu.com" in domain:
                         domain = ".baidu.com"
-                    
+
                     cookie_list = []
-                    for k, v in self.cookies.items():
-                        cookie_list.append({"name": k, "value": v, "domain": domain, "path": "/"})
+                    for key, value in self.cookies.items():
+                        cookie_list.append({"name": key, "value": value, "domain": domain, "path": "/"})
                     context.add_cookies(cookie_list)
 
                 page = context.new_page()
+                page.goto(url, wait_until="networkidle", timeout=settings.timeout * 1000)
 
-                # Wait for network idle to ensure dynamic content is loaded
-                page.goto(url, wait_until="domcontentloaded", timeout=settings.timeout * 1000)
-                
-                # Simulate human behavior
                 try:
-                    page.mouse.move(random.randint(100, 500), random.randint(100, 500))
-                    page.mouse.down()
-                    time.sleep(random.uniform(0.1, 0.3))
-                    page.mouse.move(random.randint(100, 500), random.randint(100, 500))
-                    page.mouse.up()
-                    page.evaluate("window.scrollBy(0, 300)")
+                    page.mouse.move(random.randint(100, 400), random.randint(200, 700))
+                    page.mouse.wheel(0, random.randint(200, 800))
                 except Exception:
                     pass
-                
-                # Random delay to mimic human reading/loading
-                time.sleep(random.uniform(1.5, 3.0))
-                
+
+                time.sleep(1.5)
                 content = page.content()
+                final_url = page.url
                 browser.close()
-                return content
-        except Exception as e:
-            print(f"Playwright fetch error: {e}")
+                return content, final_url
+        except Exception as exc:
+            print(f"[Fetcher] Playwright fetch error: {exc}")
+        return None
+
+    def _fetch_with_selenium(self, url: str) -> Optional[Tuple[str, str]]:
+        try:
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+        except ImportError:
+            print("[Fetcher] Selenium not installed. Run 'pip install selenium'.")
             return None
+
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        if self.proxy:
+            options.add_argument(f"--proxy-server={self.proxy}")
+        for arg in self.selenium_options.get("extra_args", []):
+            options.add_argument(arg)
+
+        driver = None
+        try:
+            driver = webdriver.Chrome(options=options)
+            driver.set_page_load_timeout(settings.timeout)
+            driver.get(url)
+            time.sleep(2.0)
+            html = driver.page_source
+            final_url = driver.current_url
+            return html, final_url
+        except Exception as exc:
+            print(f"[Fetcher] Selenium fetch error: {exc}")
+            return None
+        finally:
+            if driver:
+                driver.quit()
+
+    @staticmethod
+    def _needs_render(html: str) -> bool:
+        if not html:
+            return True
+        sample = html.strip().lower()
+        if len(sample) < 800:
+            return True
+        script_count = sample.count("<script")
+        text_block_count = sample.count("<p") + sample.count("<article") + sample.count("<section") + sample.count("<li")
+        if "enable javascript" in sample or "requires javascript" in sample:
+            return True
+        if text_block_count == 0 and script_count > 0:
+            return True
+        if script_count >= 15 and script_count > text_block_count * 2:
+            return True
+        if sample.count("var ") > 50 and text_block_count < 3:
+            return True
+        return False

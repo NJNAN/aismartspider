@@ -18,9 +18,11 @@ from aismartspider import (
     DomSummarizer,
     Executor,
     Fetcher,
+    FetchResult,
     IntentParser,
     MockClient,
     OpenAIClient,
+    GeminiClient,
     PageTypeClassifier,
     StrategyBuilder,
 )
@@ -102,7 +104,7 @@ class ExperimentRunner:
 
         # Force executor to reuse the same HTML to avoid network when running offline
         original_fetch = self.fetcher.fetch
-        self.fetcher.fetch = lambda _: html  # type: ignore
+        self.fetcher.fetch = lambda *_args, **_kwargs: FetchResult(url=case.url, html=html, renderer="mock")  # type: ignore
 
         try:
             t0 = time.perf_counter()
@@ -169,7 +171,13 @@ class ExperimentRunner:
             return html_override
 
         t0 = time.perf_counter()
-        html = self.fetcher.fetch(case.url)
+        try:
+            page = self.fetcher.fetch(case.url)
+            html = page.html
+        except Exception as exc:
+            timings["fetch"] = time.perf_counter() - t0
+            print(f"[ExperimentRunner] Fetch failed for {case.url}: {exc}")
+            return ""
         timings["fetch"] = time.perf_counter() - t0
 
         # Cache fetched HTML if a path is provided to aid subsequent offline runs
@@ -251,6 +259,8 @@ def _load_cases(config_path: str) -> List[ExperimentCase]:
 def _build_client(kind: str, api_key: Optional[str], base_url: Optional[str], model: str):
     if kind == "mock":
         return MockClient()
+    if kind == "gemini":
+        return GeminiClient(api_key=api_key, model=model)
     return OpenAIClient(api_key=api_key, base_url=base_url, model=model)
 
 
@@ -260,7 +270,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default="experiment_results.json", help="Path to write JSON results.")
     parser.add_argument(
         "--client",
-        choices=["mock", "openai"],
+        choices=["mock", "openai", "gemini"],
         default="mock",
         help="LLM client backend. Use 'openai' for OpenAI-compatible endpoints (DeepSeek, Qwen, etc).",
     )

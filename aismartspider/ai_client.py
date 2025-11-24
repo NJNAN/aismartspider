@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 
@@ -58,17 +59,33 @@ class OpenAIClient(LLMClient):
 class GeminiClient(LLMClient):
     """Client for Google Gemini models via google-generativeai SDK."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-pro") -> None:
+    def __init__(self, api_key: Optional[str] = None, model: str = "models/gemini-2.5-pro") -> None:
         try:
             import google.generativeai as genai
             self._genai = genai
             self._genai.configure(api_key=api_key)
-            self.model_name = model
+            self.model_name = model if model.startswith("models/") else f"models/{model}"
         except ImportError:
             raise ImportError("Google Generative AI SDK not found. Please run: pip install google-generativeai")
 
     def chat(self, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
-        model = self._genai.GenerativeModel(self.model_name)
+        call_kwargs = dict(kwargs)
+        temperature = call_kwargs.pop("temperature", None)
+        top_p = call_kwargs.pop("top_p", None)
+        response_format = call_kwargs.pop("response_format", None)
+        generation_config: Dict[str, Any] = {}
+
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        if top_p is not None:
+            generation_config["top_p"] = top_p
+        if isinstance(response_format, dict) and response_format.get("type") == "json_object":
+            generation_config["response_mime_type"] = "application/json"
+
+        model = self._genai.GenerativeModel(
+            self.model_name,
+            generation_config=generation_config or None,
+        )
         
         # Simple conversion of chat history to prompt for Gemini
         # (For more complex history, use model.start_chat)
@@ -78,8 +95,23 @@ class GeminiClient(LLMClient):
             content = msg.get("content", "")
             full_prompt += f"{role}: {content}\n"
             
-        response = model.generate_content(full_prompt)
-        return {"content": response.text}
+        max_retries = 10
+        base_delay = 5
+        
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(full_prompt, **call_kwargs)
+                return {"content": response.text}
+            except Exception as e:
+                # Check for ResourceExhausted (429)
+                if "429" in str(e) or "ResourceExhausted" in str(e):
+                    if attempt < max_retries - 1:
+                        sleep_time = base_delay * (1.5 ** attempt)
+                        print(f"Rate limit hit. Retrying in {sleep_time:.1f}s...")
+                        time.sleep(sleep_time)
+                        continue
+                raise e
+        return {"content": ""}
 
 
 

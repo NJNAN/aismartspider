@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup, Tag
 class DomSummarizer:
     """Generate compact JSON summaries from HTML."""
 
-    def __init__(self, max_text_nodes: int = 60, max_links: int = 20, max_lists: int = 6) -> None:
+    def __init__(self, max_text_nodes: int = 150, max_links: int = 100, max_lists: int = 20) -> None:
         self.max_text_nodes = max_text_nodes
         self.max_links = max_links
         self.max_lists = max_lists
@@ -36,6 +36,7 @@ class DomSummarizer:
         links = self._collect_links(soup)
         lists = self._collect_lists(soup)
         tag_counts = self._collect_tag_counts(soup)
+        image_hints = self._collect_image_hints(soup)
 
         summary: Dict[str, Any] = {
             "title": title,
@@ -46,6 +47,7 @@ class DomSummarizer:
             "links": links,
             "lists": lists,
             "tag_counts": tag_counts,
+            "image_hints": image_hints,
         }
         return json.dumps(summary, ensure_ascii=False)
 
@@ -136,3 +138,72 @@ class DomSummarizer:
             if isinstance(tag, Tag):
                 counter[tag.name] += 1
         return dict(counter)
+
+    def _collect_image_hints(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
+        """Capture parent/ordering info for the first few images near article content."""
+        hints: List[Dict[str, Any]] = []
+        containers = soup.select("article, main, section")
+        seen = set()
+        order = 1
+
+        def _record(img: Tag, context_parent: Tag | None) -> None:
+            nonlocal order
+            parent = context_parent or img.parent
+            parent_tag = parent.name if isinstance(parent, Tag) else ""
+            parent_class = ""
+            if isinstance(parent, Tag):
+                classes = parent.get("class", [])
+                if isinstance(classes, list):
+                    parent_class = " ".join(classes)
+                else:
+                    parent_class = str(classes)
+            snippet = ""
+            if isinstance(parent, Tag):
+                snippet = parent.get_text(strip=True)[:80]
+            hints.append(
+                {
+                    "order": order,
+                    "src_preview": (img.get("src") or "")[:120],
+                    "parent_tag": parent_tag,
+                    "parent_class": parent_class,
+                    "ancestor_chain": self._ancestor_chain(img),
+                    "context_text": snippet,
+                }
+            )
+            order += 1
+
+        for container in containers:
+            if order > 15:
+                break
+            for img in container.find_all("img"):
+                src = img.get("src")
+                if not src or src in seen:
+                    continue
+                seen.add(src)
+                _record(img, container)
+                if order > 15:
+                    break
+
+        if not hints:
+            for img in soup.find_all("img"):
+                src = img.get("src")
+                if not src or src in seen:
+                    continue
+                seen.add(src)
+                _record(img, None)
+                if order > 15:
+                    break
+        return hints
+
+    @staticmethod
+    def _ancestor_chain(node: Tag) -> List[str]:
+        chain: List[str] = []
+        for ancestor in node.parents:
+            if not isinstance(ancestor, Tag):
+                continue
+            if ancestor.name in {"html", "body"}:
+                continue
+            chain.append(ancestor.name)
+            if len(chain) >= 5:
+                break
+        return chain

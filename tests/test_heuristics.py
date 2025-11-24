@@ -1,4 +1,4 @@
-"""Tests for heuristic fallbacks on parser and builder."""
+﻿"""Tests for heuristic fallbacks on parser and builder."""
 
 from __future__ import annotations
 
@@ -18,7 +18,8 @@ class BrokenClient(LLMClient):
 
 def test_intent_parser_heuristic_fields():
     parser = IntentParser(BrokenClient())
-    intent = parser.parse("帮我抓取列表标题和图片")
+    request_text = "\u5e2e\u6211\u6293\u53d6\u5217\u8868\u6807\u9898\u548c\u56fe\u7247"
+    intent = parser.parse(request_text)
     assert intent.intent_type == IntentType.CRAWL_LIST
     assert set(intent.requested_fields or []) >= {"title", "images"}
 

@@ -2,6 +2,7 @@
 
 from aismartspider import (
     Fetcher,
+    FetchResult,
     DomSummarizer,
     MockClient,
     PageTypeClassifier,
@@ -26,7 +27,7 @@ def test_smoke_flow():
     intent = intent_parser.parse("抓标题")
     strategy = strategy_builder.build(typing, intent, dom_summary)
 
-    fetcher.fetch = lambda _: sample_html  # type: ignore
+    fetcher.fetch = lambda *_args, **_kwargs: FetchResult(url="http://example.com", html=sample_html, renderer="mock")  # type: ignore
 
     records = executor.execute("http://example.com", strategy)
 

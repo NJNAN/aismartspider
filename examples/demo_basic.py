@@ -2,6 +2,7 @@
 
 from aismartspider import (
     Fetcher,
+    FetchResult,
     DomSummarizer,
     MockClient,
     PageTypeClassifier,
@@ -30,7 +31,7 @@ def main() -> None:
     strategy = strategy_builder.build(typing, intent, dom_summary)
 
     # Monkey patch fetcher to avoid network dependency in the demo.
-    fetcher.fetch = lambda _: html  # type: ignore
+    fetcher.fetch = lambda *_args, **_kwargs: FetchResult(url=url, html=html, renderer="mock")  # type: ignore
 
     records = executor.execute(url, strategy)
 

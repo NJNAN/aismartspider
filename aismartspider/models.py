@@ -59,6 +59,8 @@ class Strategy:
     max_items: Optional[int] = None
 
     image_selector: Optional[str] = None
+    primary_image_field: Optional[str] = None
+    primary_image_selector: Optional[str] = None
     
     field_limits: Optional[Dict[str, int]] = None
 
