@@ -2,13 +2,52 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
 from curl_cffi import requests
+from curl_cffi.requests import RequestsError
 
 from .config import settings
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - certifi is always installed in our env
+    certifi = None
+
+
+def _ensure_ascii_cert_path() -> Optional[str]:
+    """Ensure CA bundle lives on an ASCII path (curl can't open non-ASCII)."""
+    if certifi is None:
+        return None
+
+    try:
+        original = Path(certifi.where())
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[Fetcher] Failed to locate certifi bundle: {exc}")
+        return None
+
+    try:
+        str(original).encode("ascii")
+        return str(original)
+    except UnicodeEncodeError:
+        temp_dir = Path(tempfile.gettempdir())
+        ascii_copy = temp_dir / "certifi_cacert.pem"
+        try:
+            if not ascii_copy.exists() or original.stat().st_mtime > ascii_copy.stat().st_mtime:
+                shutil.copy2(original, ascii_copy)
+            return str(ascii_copy)
+        except Exception as exc:
+            print(f"[Fetcher] Failed to copy certifi bundle to ASCII path: {exc}")
+            return None
+
+
+CERT_BUNDLE_PATH = _ensure_ascii_cert_path()
 
 
 @dataclass
@@ -44,6 +83,9 @@ class Fetcher:
 
         default_backends: Tuple[str, ...] = ("playwright", "selenium") if use_playwright else ()
         self.render_backends: Tuple[str, ...] = tuple(render_backends or default_backends)
+        self._cert_bundle = CERT_BUNDLE_PATH
+        self._playwright_disabled = False
+        self._selenium_disabled = False
 
     def fetch(self, url: str) -> FetchResult:
         """Fetch page source via static request with automatic render fallback."""
@@ -97,15 +139,35 @@ class Fetcher:
         }
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
 
-        response = requests.get(
-            encoded_url,
-            headers=headers,
-            cookies=self.cookies,
-            proxies=proxies,
-            timeout=settings.timeout,
-            impersonate="chrome120",
-            allow_redirects=True,
-        )
+        verify_arg: bool | str = self._cert_bundle or True
+
+        try:
+            response = requests.get(
+                encoded_url,
+                headers=headers,
+                cookies=self.cookies,
+                proxies=proxies,
+                timeout=settings.timeout,
+                impersonate="chrome120",
+                allow_redirects=True,
+                verify=verify_arg,
+            )
+        except RequestsError as exc:
+            message = str(exc).lower()
+            if "certificate" in message and "verify" in message and verify_arg is not False:
+                print("[Fetcher] TLS verification failed (likely non-ASCII CA path). Retrying insecurely.")
+                response = requests.get(
+                    encoded_url,
+                    headers=headers,
+                    cookies=self.cookies,
+                    proxies=proxies,
+                    timeout=settings.timeout,
+                    impersonate="chrome120",
+                    allow_redirects=True,
+                    verify=False,
+                )
+            else:
+                raise
 
         if response.status_code == 403:
             print(f"[Fetcher] 403 Forbidden for {url}")
@@ -121,6 +183,10 @@ class Fetcher:
 
     def _render_with_backends(self, url: str) -> Optional[Tuple[str, str, str]]:
         for backend in self.render_backends:
+            if backend == "playwright" and self._playwright_disabled:
+                continue
+            if backend == "selenium" and self._selenium_disabled:
+                continue
             if backend == "playwright":
                 rendered = self._fetch_with_playwright(url)
             elif backend == "selenium":
@@ -134,11 +200,14 @@ class Fetcher:
         return None
 
     def _fetch_with_playwright(self, url: str) -> Optional[Tuple[str, str]]:
+        if self._playwright_disabled:
+            return None
         try:
             from playwright.sync_api import sync_playwright
             import random
         except ImportError:
             print("[Fetcher] Playwright not installed. Run 'pip install playwright' and 'playwright install'.")
+            self._playwright_disabled = True
             return None
 
         try:
@@ -194,14 +263,21 @@ class Fetcher:
                 return content, final_url
         except Exception as exc:
             print(f"[Fetcher] Playwright fetch error: {exc}")
+            message = str(exc).lower()
+            if "playwright install" in message or "executable doesn't exist" in message:
+                print("[Fetcher] Disabling Playwright backend for this run. Falling back to static fetch.")
+                self._playwright_disabled = True
         return None
 
     def _fetch_with_selenium(self, url: str) -> Optional[Tuple[str, str]]:
+        if self._selenium_disabled:
+            return None
         try:
             from selenium import webdriver
             from selenium.webdriver.chrome.options import Options
         except ImportError:
             print("[Fetcher] Selenium not installed. Run 'pip install selenium'.")
+            self._selenium_disabled = True
             return None
 
         options = Options()
@@ -223,6 +299,7 @@ class Fetcher:
             return html, final_url
         except Exception as exc:
             print(f"[Fetcher] Selenium fetch error: {exc}")
+            self._selenium_disabled = True
             return None
         finally:
             if driver:
